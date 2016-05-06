@@ -1,0 +1,7 @@
+membudget_mb: 	 50
+niters: 	 7
+nshards: 	 6
+execute-updates: 	 3.09368s
+runtime: 	 8.15298
+app: 	 connected-components
+file: 	 /home/mzj/mzjdata/web-Google/web-Google.txt

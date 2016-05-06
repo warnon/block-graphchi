@@ -1,0 +1,37 @@
+ === REPORT FOR connected-components() ===
+[Numeric]
+cachesize_mb:		0
+compression:		1
+execthreads:		4
+loadthreads:		4
+membudget_mb:		50
+niothreads:		2
+niters:		7
+nshards:		6
+nvertices:		916428
+scheduler:		0
+serialized-updates:		1.30395e+07	(count: 130, min: 45, max: 112778, avg: 100304)
+stripesize:		1.07374e+09
+updates:		6.415e+06
+work:		7.14705e+07
+[Timings]
+blockload:		0.12907s	 (count: 196, min: 1e-06s, max: 0.003958, avg: 0.00065852s)
+commit:		0.491699s	 (count: 91, min: 0.00029s, max: 0.026924, avg: 0.00540329s)
+commit_thr:		0.729848s	 (count: 105, min: 0.003068s, max: 0.025743, avg: 0.00695093s)
+execute-updates:		3.09368s	 (count: 42, min: 0.000201s, max: 0.335475, avg: 0.0736591s)
+iomgr_init:		0.000116 s
+label-analysis:		0.050239 s
+memoryshard_create_edges:		2.82651s	 (count: 42, min: 0.000768s, max: 0.097201, avg: 0.0672979s)
+memshard_commit:		0.256146s	 (count: 42, min: 0.000281s, max: 0.019425, avg: 0.00609871s)
+preada_now:		0.260465s	 (count: 322, min: 1e-06s, max: 0.003684, avg: 0.000808898s)
+pwritea_now:		1.03782s	 (count: 245, min: 5e-06s, max: 0.026921, avg: 0.00423599s)
+read_next_vertices:		1.43439s	 (count: 210, min: 5.4e-05s, max: 0.020325, avg: 0.00683043s)
+runtime:		8.15298 s
+stripedio_wait_for_reads:		0.282476s	 (count: 42, min: 0s, max: 0.050461, avg: 0.00672562s)
+stripedio_wait_for_writes:		0.635105s	 (count: 50, min: 0s, max: 0.060409, avg: 0.0127021s)
+[Other]
+app:	connected-components
+engine:	default
+file:	/home/mzj/mzjdata/web-Google/web-Google.txt
+INFO:     stripedio.hpp(~block_cache:170): Cache stats: hits=0 misses=306
+INFO:     stripedio.hpp(~block_cache:171):  -- in total had 0 MB in cache.
