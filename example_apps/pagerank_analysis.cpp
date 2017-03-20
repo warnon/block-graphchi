@@ -39,7 +39,7 @@
 
 using namespace graphchi;
  
-#define THRESHOLD 1e-3 
+#define THRESHOLD 1e-2    
 #define RANDOMRESETPROB 0.15
 
 
@@ -58,9 +58,9 @@ float epsilon = 0.001;
 //int* array = NULL;
 PR_Count* array = NULL;
 int repeat_count = 0;
-//int max_repeat = 999999999;
+int max_repeat = 999999999;
 bool scheduler = false;
-//bool num_tasks_print = false;
+bool num_tasks_print = false;
 vid_t sum_tasks= 0;
 vid_t curr_sum = 0;
 
@@ -94,6 +94,15 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
       */
 	void before_exec_interval(vid_t window_st, vid_t window_en, graphchi_context &ginfo) {        
 		interval_converged = true;
+		if(num_tasks_print && scheduler){
+			//vid_t sum = ginfo.scheduler->total_tasks(window_st, window_en);
+			curr_sum = ginfo.scheduler->total_tasks(window_st, window_en);
+			logstream(LOG_INFO)<<"num of vertices being scheduled="<<curr_sum<<"/"<<window_en-window_st+1<<std::endl;		
+			sum_tasks += curr_sum;
+			array[ginfo.exec_interval].count++;
+			if(scheduler) array[ginfo.exec_interval].tasks += curr_sum;	
+			else	array[ginfo.exec_interval].tasks +=	window_en - window_st + 1;  
+		}
 	}
     
   	bool repeat_updates(graphchi_context &gcontext){
@@ -101,18 +110,19 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 			return false;
 		else{
 			//if(repeat_count % 100 == 0 || interval_converged)
-			if(repeat_count % 100 == 0 || interval_converged)
+			bool count = (max_repeat < 999999999 && repeat_count == max_repeat);
+			if(repeat_count % 100 == 0 || interval_converged || count)
 			logstream(LOG_INFO)<<"interval="<<gcontext.exec_interval<<" iter="<<gcontext.iteration
 				<<"\trepeat_count= "<<repeat_count<<std::endl;
-			repeat_count = (interval_converged) ? 0 : repeat_count+1; 
+			repeat_count = (interval_converged || count) ? 0 : repeat_count+1; 
 			//repeat_count = (interval_converged) ? 0 : repeat_count+1; 
-			/*
+
 			if(num_tasks_print){
 				sum_tasks = interval_converged ? 0 : sum_tasks; 
 			}
-			*/	
+				
 			//return !interval_converged ;
-			return !(interval_converged);
+			return !(interval_converged || count);
 		}
 	}  
     /**
@@ -122,6 +132,10 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 		//if(scheduler) ginfo.scheduler->remove_tasks_now(v.id(), v.id());
         //float sum=0;
         if (ginfo.iteration == 0) {
+            /* On first iteration, initialize vertex and out-edges. 
+               The initialization is important,
+               because on every run, GraphChi will modify the data in the edges on disk. 
+             */
             for(int i=0; i < v.num_outedges(); i++) {
                 graphchi_edge<float> * edge = v.outedge(i);
                 //edge->set_data( RANDOMRESETPROB/v.num_outedges());
@@ -131,6 +145,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 			//schedule this vertex for next iteration
 			if(scheduler) ginfo.scheduler->add_task(v.id(), false);
         } else {
+
 			if(scheduler) ginfo.scheduler->remove_tasks_now(v.id(), v.id());
         	float sum=0;
 			float old_value = v.get_data();
@@ -146,8 +161,6 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             /* Write my pagerank divided by the number of out-edges to
                each of my out-edges. */
 			
-			//check if PR fluctuate
-
             if (v.num_outedges() > 0) {
                 float pagerankcont = pagerank / v.num_outedges();
                 for(int i=0; i < v.num_outedges(); i++) {
@@ -166,7 +179,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             }
             /* Keep track of the progression of the computation.
                GraphChi engine writes a file filename.deltalog. */
-            //ginfo.log_change(std::abs(pagerank - v.get_data()));
+            ginfo.log_change(std::abs(pagerank - v.get_data()));
             
             /* Set my new pagerank as the vertex value */
             v.set_data(pagerank); 
@@ -175,6 +188,14 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 					converged = false;
 				if(interval_converged)
 					interval_converged = false;
+				/*if (v.num_outedges() > 0) {
+					float pagerankcont = pagerank / v.num_outedges();
+					for(int i=0; i < v.num_outedges(); i++) {
+						graphchi_edge<float> * edge = v.outedge(i);
+						edge->set_data(pagerankcont);
+					}
+				}
+				v.set_data(pagerank);*/ 
 			}
         }
     }
@@ -223,9 +244,8 @@ int main(int argc, const char ** argv) {
     scheduler          		= get_option_int("scheduler", false);                    // Non-dynamic version of pagerank.
     int ntop                = get_option_int("top", 50);
     epsilon					= get_option_float("epsilon", 0.001);
-	//bool parallel			= get_option_int("parallel", 0);
-	//num_tasks_print			= get_option_int("print", false);
-	//max_repeat				= get_option_int("repeat", 999999999); // max number of repeat allowed for each subgraph
+	num_tasks_print			= get_option_int("print", false);
+	max_repeat				= get_option_int("repeat", 999999999); // max number of repeat allowed for each subgraph
     /* Process input file - if not already preprocessed */
     int nshards             = convert_if_notexists<EdgeDataType>(filename, get_option_string("nshards", "auto"));
 	assert(0 != nshards);
@@ -235,8 +255,6 @@ int main(int argc, const char ** argv) {
     graphchi_engine<float, float> engine(filename, nshards, scheduler, m); 
     engine.set_modifies_inedges(false); // Improves I/O performance.
     
-	//engine.set_enable_deterministic_parallelism(parallel);	
-
     bool inmemmode = false;//engine.num_vertices() * sizeof(EdgeDataType) < (size_t)engine.get_membudget_mb() * 1024L * 1024L;
     if (inmemmode) {
         logstream(LOG_INFO) << "Running Pagerank by holding vertices in-memory mode!" << std::endl;
@@ -258,7 +276,6 @@ int main(int argc, const char ** argv) {
     }
     
 	metrics_report(m);    
-	/*
 	if(	num_tasks_print ){
 		array = (PR_Count*)malloc(sizeof(PR_Count)*nshards);
 		assert(array != NULL);
@@ -285,7 +302,6 @@ int main(int argc, const char ** argv) {
 		free(array);
 		printf("avg\t%.4f\t%.4f\n", (float)avg_count/nshards, (float)avg_tasks/nvertices);	
 	}
-	*/
     return 0;
 }
 

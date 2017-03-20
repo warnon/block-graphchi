@@ -39,8 +39,24 @@
 
 using namespace graphchi;
  
-#define THRESHOLD 1e-3 
+#define THRESHOLD 1e-3
 #define RANDOMRESETPROB 0.15
+
+const int ColorLevel = 12;
+int DeltaColor = 5;
+double Bound = 1e-4;
+double Damping = 0.1;
+double Sigma = 4.0;
+double Lambda = 5.0;
+
+
+
+struct Vertexinfo{
+	double potential[ColorLevel*2+1];	
+	double belief[ColorLevel*2+1];	
+	int obs;	
+		
+}
 
 
 typedef float VertexDataType;
@@ -131,6 +147,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 			//schedule this vertex for next iteration
 			if(scheduler) ginfo.scheduler->add_task(v.id(), false);
         } else {
+
 			if(scheduler) ginfo.scheduler->remove_tasks_now(v.id(), v.id());
         	float sum=0;
 			float old_value = v.get_data();
@@ -146,8 +163,6 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             /* Write my pagerank divided by the number of out-edges to
                each of my out-edges. */
 			
-			//check if PR fluctuate
-
             if (v.num_outedges() > 0) {
                 float pagerankcont = pagerank / v.num_outedges();
                 for(int i=0; i < v.num_outedges(); i++) {
@@ -166,7 +181,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             }
             /* Keep track of the progression of the computation.
                GraphChi engine writes a file filename.deltalog. */
-            //ginfo.log_change(std::abs(pagerank - v.get_data()));
+            ginfo.log_change(std::abs(pagerank - v.get_data()));
             
             /* Set my new pagerank as the vertex value */
             v.set_data(pagerank); 
@@ -223,7 +238,6 @@ int main(int argc, const char ** argv) {
     scheduler          		= get_option_int("scheduler", false);                    // Non-dynamic version of pagerank.
     int ntop                = get_option_int("top", 50);
     epsilon					= get_option_float("epsilon", 0.001);
-	//bool parallel			= get_option_int("parallel", 0);
 	//num_tasks_print			= get_option_int("print", false);
 	//max_repeat				= get_option_int("repeat", 999999999); // max number of repeat allowed for each subgraph
     /* Process input file - if not already preprocessed */
@@ -235,8 +249,6 @@ int main(int argc, const char ** argv) {
     graphchi_engine<float, float> engine(filename, nshards, scheduler, m); 
     engine.set_modifies_inedges(false); // Improves I/O performance.
     
-	//engine.set_enable_deterministic_parallelism(parallel);	
-
     bool inmemmode = false;//engine.num_vertices() * sizeof(EdgeDataType) < (size_t)engine.get_membudget_mb() * 1024L * 1024L;
     if (inmemmode) {
         logstream(LOG_INFO) << "Running Pagerank by holding vertices in-memory mode!" << std::endl;

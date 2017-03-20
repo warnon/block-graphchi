@@ -30,33 +30,104 @@
 #include <string>
 #include <fstream>
 #include <cmath>
+#include <time.h>
 
 #define GRAPHCHI_DISABLE_COMPRESSION
 
 
 #include "graphchi_basic_includes.hpp"
 #include "util/toplist.hpp"
+#include "util/UnaryFactor.hpp"
 
 using namespace graphchi;
  
-#define THRESHOLD 1e-3 
+#define THRESHOLD 1e-3
 #define RANDOMRESETPROB 0.15
 
+//const int ColorLevel = 12;
+int DeltaColor = 5;
+double Bound = 1e-3;
+double Damping = 0.1;
+double Sigma = 4.0;
+double Lambda = 5.0;
 
-typedef float VertexDataType;
-typedef float EdgeDataType;
-
-struct PR_Count{
-int count;
-int tasks;
-PR_Count(){
-	count = tasks = 0;
-}
+struct VertexInfo{
+	UnaryFactor belief;
+	UnaryFactor potential;
+	//gray value
+	int obs;	
+	/*
+	VertexInfo(){
+		
+	}*/	
+	VertexInfo(const VertexInfo& vdata){
+		belief = vdata.belief;
+		potential = vdata.potential;
+	}
+	VertexInfo(int grayvalue){
+		obs = grayvalue;
+	}
+	void VertexInit(){
+		belief.resize(ColorLevel*2+1);	
+		potential.resize(ColorLevel*2+1);	
+		belief.uniform();
+		potential.uniform();
+		belief.normalize();
+		potential.normalize();
+		double SigmaSq = Sigma*Sigma;
+		for(int i=0; i<=ColorLevel; i++){
+			potential.data[i] =	-(i-ColorLevel)*(i-ColorLevel)/(2.0*SigmaSq);	 	
+		}
+		potential.normalize();
+	}	
 };
+
+struct EdgeInfo{
+	UnaryFactor msg;		
+	int largeObs;	
+	int smallObs;
+	/*
+	EdgeInfo(){
+		msg.resize(ColorLevel*2+1);	
+	}	
+	*/
+	EdgeInfo(){}
+	EdgeInfo(const EdgeInfo& edata){
+		largeObs = edata.largeObs;
+		smallObs = edata.smallObs;
+		msg = edata.msg;	
+	}
+	void EdgeInit(){
+		msg.uniform();
+		msg.normalize();	
+	}
+
+	int& my_label(vid_t myid, vid_t nbid){
+		assert(myid != 0xffffffff && nbid != 0xffffffff);
+		if(myid < nbid)	 return smallObs;	
+		else return largeObs;
+	}		
+	
+	int& nb_label(vid_t myid, vid_t nbid){
+		assert(myid != 0xffffffff && nbid != 0xffffffff);
+		if(myid < nbid) return largeObs;
+		else return smallObs;
+	}
+	/*
+	friend std::ostream& operator << (std::ostream& ost, EdgeInfo edata){
+		ost<<edata.msg<<edata.largeObs<<edata.smallObs;
+		return ost;	
+	}
+	*/
+};
+
+typedef VertexInfo VertexDataType;
+typedef EdgeInfo EdgeDataType;
+
 
 float epsilon = 0.001;
 //int* array = NULL;
-PR_Count* array = NULL;
+//PR_Count* array = NULL;
 int repeat_count = 0;
 //int max_repeat = 999999999;
 bool scheduler = false;
@@ -64,21 +135,17 @@ bool scheduler = false;
 vid_t sum_tasks= 0;
 vid_t curr_sum = 0;
 
-struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
+struct BPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
    	bool converged;
 	bool interval_converged; 
     /**
       * Called before an iteration starts. Not implemented.
       */
     void before_iteration(int iteration, graphchi_context &ginfo) {
-			/*
-			if(ginfo.iteration == 1){
-				ginfo.scheduler->add_task_to_all();	
-			}
-			*/
+			if(iteration == 0)
+				srand(time(NULL));	
 			converged = iteration > 0;
     }
-    
     /**
       * Called after an iteration has finished. Not implemented.
       */
@@ -101,58 +168,95 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 			return false;
 		else{
 			//if(repeat_count % 100 == 0 || interval_converged)
-			if(repeat_count % 100 == 0 || interval_converged)
+			if(repeat_count % 20 == 0 || interval_converged)
 			logstream(LOG_INFO)<<"interval="<<gcontext.exec_interval<<" iter="<<gcontext.iteration
 				<<"\trepeat_count= "<<repeat_count<<std::endl;
 			repeat_count = (interval_converged) ? 0 : repeat_count+1; 
-			//repeat_count = (interval_converged) ? 0 : repeat_count+1; 
-			/*
-			if(num_tasks_print){
-				sum_tasks = interval_converged ? 0 : sum_tasks; 
-			}
-			*/	
-			//return !interval_converged ;
 			return !(interval_converged);
 		}
 	}  
     /**
-      * Pagerank update function.
+      * belief propagation update function.
       */
-    void update(graphchi_vertex<VertexDataType, EdgeDataType> &v, graphchi_context &ginfo) {
+    void update(graphchi_vertex<VertexDataType, EdgeDataType> &vertex, graphchi_context &ginfo) {
 		//if(scheduler) ginfo.scheduler->remove_tasks_now(v.id(), v.id());
         //float sum=0;
         if (ginfo.iteration == 0) {
-            for(int i=0; i < v.num_outedges(); i++) {
-                graphchi_edge<float> * edge = v.outedge(i);
-                //edge->set_data( RANDOMRESETPROB/v.num_outedges());
-                edge->set_data(1.0 / v.num_outedges());
+			//randomly select a grayvalue ranging from 0 to 256
+			int gray_value = rand() % 256;
+			VertexDataType vdata = vertex.get_data();
+			vdata.VertexInit();
+			vdata.obs = gray_value;	
+			vertex.set_data(vdata);
+			for(int i=0; i < vertex.num_edges(); i++) {
+				graphchi_edge<EdgeDataType> * edge;
+				edge = vertex.edge(i);	
+				EdgeDataType edata = edge->get_data();
+				edata.EdgeInit();	
+				edata.my_label(vertex.id(), edge->vertex_id()) = gray_value;
+				edge->set_data(edata);
+				/*
+				   if(i<vertex.num_inedges()){
+				   edge = vertex.inedge(i);	
+				   EdgeDataType edata = edge->get_data();
+				   edata.EdgeInit();	
+				   edata.dstObs = gray_value;
+				   edge->set_data(edata);
+				   }else{
+				   int idx = i-vertex.num_inedges();
+				   edge = vertex.outedge(i);
+				   EdgeDataType edata = edge->get_data();		
+				   edata.EdgeInit();	
+				   edata.srcObs = gray_value;
+				   edge->set_data(edata);
+				   }
+				   */
             }
-            v.set_data(RANDOMRESETPROB); 
+            //v.set_data(RANDOMRESETPROB); 
 			//schedule this vertex for next iteration
-			if(scheduler) ginfo.scheduler->add_task(v.id(), false);
+				
+			if(scheduler) ginfo.scheduler->add_task(vertex.id(), false);
         } else {
-			if(scheduler) ginfo.scheduler->remove_tasks_now(v.id(), v.id());
-        	float sum=0;
-			float old_value = v.get_data();
+			if(scheduler) ginfo.scheduler->remove_tasks_now(vertex.id(), vertex.id());
+        	//float sum=0;
+			//float old_value = v.get_data();
             /* Compute the sum of neighbors' weighted pageranks by
                reading from the in-edges. */
-            for(int i=0; i < v.num_inedges(); i++) {
-                sum += v.inedge(i)->get_data();
+			VertexDataType vdata = vertex.get_data();	
+			vdata.belief.copy(vdata.potential);
+            for(int i=0; i < vertex.num_edges(); i++) {
+				vdata.belief.times((vertex.edge(i)->get_data()).msg);	
+                //sum += v.inedge(i)->get_data();
                 //sum += val;                    
             }
+			vdata.belief.normalize();
             /* Compute my pagerank */
-            float pagerank = RANDOMRESETPROB + (1 - RANDOMRESETPROB) * sum;
+            //float pagerank = RANDOMRESETPROB + (1 - RANDOMRESETPROB) * sum;
             
             /* Write my pagerank divided by the number of out-edges to
                each of my out-edges. */
-			
-			//check if PR fluctuate
-
-            if (v.num_outedges() > 0) {
-                float pagerankcont = pagerank / v.num_outedges();
-                for(int i=0; i < v.num_outedges(); i++) {
-                    graphchi_edge<float> * edge = v.outedge(i);
-					edge->set_data(pagerankcont);
+			double max_residual = .0;	
+            if (vertex.num_edges() > 0) {
+				UnaryFactor cavity, tmpFactor; 
+				tmpFactor.resize(ColorLevel*2+1);
+                //float pagerankcont = pagerank / v.num_outedges();
+                for(int i=0; i < vertex.num_edges(); i++) {
+					cavity = vdata.belief;
+                    graphchi_edge<EdgeDataType> * edge = vertex.edge(i);
+					EdgeDataType edata = edge->get_data();
+					cavity.divide(edata.msg);
+					cavity.normalize();	
+					int myobs = edata.my_label(vertex.id(), edge->vertex_id());		
+					int nbobs = edata.nb_label(vertex.id(), edge->vertex_id());		
+					tmpFactor.convolve(myobs, nbobs, DeltaColor, ColorLevel, Lambda, cavity);
+					tmpFactor.normalize();			
+					tmpFactor.damp(edata.msg, Damping);
+					//for termination check
+					double residual = tmpFactor.residual(edata.msg);
+					max_residual = max_residual < residual ? residual : max_residual; 
+					edata.msg = tmpFactor;	
+					edge->set_data(edata);	
+					//edge->set_data(pagerankcont);
 					if(scheduler){
 						if(edge->vertexid >= ginfo.interval_st){
 							if(!ginfo.scheduler->is_scheduled(edge->vertexid, true))
@@ -167,10 +271,11 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             /* Keep track of the progression of the computation.
                GraphChi engine writes a file filename.deltalog. */
             //ginfo.log_change(std::abs(pagerank - v.get_data()));
+            ginfo.log_change(max_residual);
             
             /* Set my new pagerank as the vertex value */
-            v.set_data(pagerank); 
-			if(std::abs(pagerank-old_value) > epsilon){
+            //v.set_data(pagerank); 
+			if(max_residual > Bound){
 				if(converged)
 					converged = false;
 				if(interval_converged)
@@ -185,6 +290,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
   * Faster version of pagerank which holds vertices in memory. Used only if the number
   * of vertices is small enough.
   */
+/*
 struct PagerankProgramInmem : public GraphChiProgram<VertexDataType, EdgeDataType> {
     
     std::vector<EdgeDataType> pr;
@@ -205,25 +311,23 @@ struct PagerankProgramInmem : public GraphChiProgram<VertexDataType, EdgeDataTyp
             if (v.outc > 0) pr[v.id()] = 1.0f / v.outc;
         }
         if (ginfo.iteration == ginfo.num_iterations - 1) {
-            /* On last iteration, multiply pr by degree and store the result */
             v.set_data(v.outc > 0 ? pr[v.id()] * v.outc : pr[v.id()]);
         }
     }
     
 };
-
+*/
 int main(int argc, const char ** argv) {
     graphchi_init(argc, argv);
-    metrics m("block-pagerank");
+    metrics m("block-BP");
     global_logger().set_log_level(LOG_DEBUG);
 
     /* Parameters */
     std::string filename    = get_option_string("file"); // Base filename
     int niters              = get_option_int("niters", 100000);
     scheduler          		= get_option_int("scheduler", false);                    // Non-dynamic version of pagerank.
-    int ntop                = get_option_int("top", 50);
+    //int ntop                = get_option_int("top", 50);
     epsilon					= get_option_float("epsilon", 0.001);
-	//bool parallel			= get_option_int("parallel", 0);
 	//num_tasks_print			= get_option_int("print", false);
 	//max_repeat				= get_option_int("repeat", 999999999); // max number of repeat allowed for each subgraph
     /* Process input file - if not already preprocessed */
@@ -232,31 +336,31 @@ int main(int argc, const char ** argv) {
 	//array = (int*)malloc(sizeof(int)*nshards);
 
     /* Run */
-    graphchi_engine<float, float> engine(filename, nshards, scheduler, m); 
+    graphchi_engine<VertexDataType, EdgeDataType> engine(filename, nshards, scheduler, m); 
     engine.set_modifies_inedges(false); // Improves I/O performance.
     
-	//engine.set_enable_deterministic_parallelism(parallel);	
-
     bool inmemmode = false;//engine.num_vertices() * sizeof(EdgeDataType) < (size_t)engine.get_membudget_mb() * 1024L * 1024L;
     if (inmemmode) {
+		/*
         logstream(LOG_INFO) << "Running Pagerank by holding vertices in-memory mode!" << std::endl;
         engine.set_modifies_outedges(false);
         engine.set_disable_outedges(true);
         engine.set_only_adjacency(true);
         PagerankProgramInmem program(engine.num_vertices());
         engine.run(program, niters);
+		*/
     } else {
-        PagerankProgram program;
+        BPProgram program;
         engine.run(program, niters);
     }
     
-    /* Output top ranked vertices */
+	/*
     std::vector< vertex_value<float> > top = get_top_vertices<float>(filename, ntop);
     std::cout << "Print top " << ntop << " vertices:" << std::endl;
     for(int i=0; i < (int)top.size(); i++) {
         std::cout << (i+1) << ". " << top[i].vertex << "\t" << top[i].value << std::endl;
     }
-    
+   	*/ 
 	metrics_report(m);    
 	/*
 	if(	num_tasks_print ){

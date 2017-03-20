@@ -12,6 +12,8 @@ using namespace graphchi;
 bool        scheduler = true;
 vid_t		single_source = 0;
 bool		reset_edge_value = false;
+bool		num_tasks_print = false;
+
 /**
  * Type definitions. Remember to create suitable graph shards using the
  * Sharder-program. 
@@ -38,13 +40,21 @@ struct edgeWithSrcValue{
 	}*/
 };
 
-
-
 typedef float VertexDataType;       // vid_t is the vertex id type
 typedef edgeWithSrcValue EdgeDataType;
-typedef float InputEdgeDataType;
 
+static void parse(EdgeDataType& edata, const char* s){
+	edata.value = atof(s);
+}
+
+
+//typedef float InputEdgeDataType;
+
+const float infinity=99999999.0;
 static uint32_t repeat_count = 0;
+
+bool converged ;
+bool interval_converged;
 
 /**
  * GraphChi programs need to subclass GraphChiProgram<vertex-type, edge-type> 
@@ -52,19 +62,6 @@ static uint32_t repeat_count = 0;
  */
 struct SSSPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
     
-  	bool converged ;
-	bool interval_converged;
-//	VertexDataType * vertex_values;
- 
-	float neighbor_value( graphchi_edge<EdgeDataType> * edge ) {
-//		return vertex_values[edge->vertex_id()];
-		return edge->get_data().srcValue;
-	}
-
-	void set_data( graphchi_vertex<VertexDataType, EdgeDataType> &vertex, float value ){
-//		vertex_values[vertex.id()] = value;
-		vertex.set_data(value);
-	}
 
     /**
      *  Vertex update function.
@@ -76,25 +73,29 @@ struct SSSPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
         
         if (scheduler) gcontext.scheduler->remove_tasks_now(vertex.id(), vertex.id());
         
-		/*in the first (0) iteration, the program should 
-		 * initialize all the values of the vertice as well as their out-edges.
-		 */
+
         if (gcontext.iteration == 0) {
 			if( vertex.id() == single_source ){
 				vertex.set_data( 0.0 );
 			
 				converged = false;
-				  //	gcontext.scheduler->add_task(vertex.id());
 				for(int j=0;j<vertex.num_outedges();j++){
             		if (scheduler)
-						gcontext.scheduler->add_task(vertex.outedge(j)->vertexid);
-					vertex.outedge(j)->set_data(edgeWithSrcValue(vertex.outedge(j)->get_data().value,vertex.get_data()));
+						gcontext.scheduler->add_task(vertex.outedge(j)->vertexid, false);
+					
+					EdgeDataType edata = vertex.outedge(j)->get_data();
+					edata.srcValue = 0.0;
+					vertex.outedge(j)->set_data(edata);
 				}
 			}else{
-				vertex.set_data( std::numeric_limits<float>::infinity() );
+				vertex.set_data(infinity);
 				for(int j=0;j<vertex.num_outedges();j++){
-					//vertex.outedge(j).get_data().updateSrcValue(vertex.get_data());n
-					vertex.outedge(j)->set_data(edgeWithSrcValue(vertex.outedge(j)->get_data().value,vertex.get_data()));
+					if (scheduler)
+						gcontext.scheduler->add_task(vertex.outedge(j)->vertexid, false);
+					EdgeDataType edata = vertex.outedge(j)->get_data();
+					edata.srcValue = infinity;
+					vertex.outedge(j)->set_data(edata);
+					//vertex.outedge(j)->set_data(edgeWithSrcValue(vertex.outedge(j)->get_data().value,vertex.get_data()));
 				}
 			}
 
@@ -114,14 +115,17 @@ struct SSSPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 			//std::cout<<vertex.id()<<" into >>>>>>>>>>>>>"<<std::endl;
 			float min = vertex.get_data();
 			for( int i=0; i<vertex.num_inedges(); i++ ){
-				float tmp = ( neighbor_value(vertex.inedge(i)) + vertex.inedge(i)->get_data().value ); 
+				//float tmp = ( neighbor_value(vertex.inedge(i)) + vertex.inedge(i)->get_data().value ); 
+				EdgeDataType edata = vertex.inedge(i)->get_data();
+				float tmp = edata.srcValue + edata.value; 
 				if( tmp < min ){
 					min = tmp;
 				}
 			}
 			if(min < vertex.get_data()){
-				set_data( vertex, min);
-				for(int j=0;j<vertex.num_outedges();j++){
+				//set_data( vertex, min);
+				vertex.set_data(min);
+				for(int j=0; j<vertex.num_outedges(); j++){
 					vid_t out_edge_vid = vertex.outedge(j)->vertexid;
 					if (scheduler){
 						if(out_edge_vid >= gcontext.interval_st){	
@@ -132,8 +136,9 @@ struct SSSPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 							gcontext.scheduler->add_task(vertex.outedge(j)->vertexid, false);
 						}
 					}
-					//vertex.outedge(j)->get_data().updateSrcValue(vertex.get_data());
-					vertex.outedge(j)->set_data(edgeWithSrcValue(vertex.outedge(j)->get_data().value,vertex.get_data()));
+					EdgeDataType edata = vertex.outedge(j)->get_data();
+					edata.srcValue = min;
+					vertex.outedge(j)->set_data(edata);
 				}  
 				converged = false;
 				interval_converged = false;
@@ -150,6 +155,9 @@ struct SSSPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 				<<gcontext.iteration<<"\t repeat_count="<<repeat_count<<std::endl;
 			}
 			repeat_count = interval_converged ? 0 : repeat_count+1;	
+			if(interval_converged){
+				assert(gcontext.scheduler->total_tasks(gcontext.interval_st, gcontext.interval_en) == 0);
+			}
 			return !interval_converged;
 		}
 	}
@@ -169,16 +177,20 @@ struct SSSPProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             std::cout << "Converged!" << std::endl;
             ginfo.set_last_iteration(iteration);
         }
-//		__sync_synchronize();
     }
     
     /**
      * Called before an execution interval is started.
      */
-    void before_exec_interval(vid_t window_st, vid_t window_en, graphchi_context &ginfo) {        
+	void before_exec_interval(vid_t window_st, vid_t window_en, graphchi_context &ginfo) {        
 		interval_converged = true;
-    }
-    
+		if(num_tasks_print){
+			vid_t sum = ginfo.scheduler->total_tasks(window_st, window_en);
+			logstream(LOG_INFO)<<"num of vertices scheduled="<<sum<<"/"<<window_en-window_st+1<<std::endl;		
+			//sum_tasks += sum;
+		}	
+	}
+
     /**
      * Called after an execution interval has finished.
      */
@@ -202,6 +214,7 @@ int main(int argc, const char ** argv) {
     scheduler            = get_option_int("scheduler", false);
 	single_source		 = get_option_int("root", 0);
 	reset_edge_value	 = get_option_int("reset_edge_value", false);
+	num_tasks_print		 = get_option_int("print", false);
 	//int ntop 			 = get_option_int("top",30);
 //    
 //	std::cout << "------------------------\tExecution Mode\t----------------" << std::endl;
@@ -223,7 +236,8 @@ int main(int argc, const char ** argv) {
 	std::cout << "------------------------------------------------------------" << std::endl;
 
     /* Process input file - if not already preprocessed */
-    int nshards             = (int) convert_if_notexists<InputEdgeDataType,EdgeDataType>(filename, get_option_string("nshards", "auto"));
+    //int nshards             = (int) convert_if_notexists<InputEdgeDataType,EdgeDataType>(filename, get_option_string("nshards", "auto"));
+    int nshards             = (int) convert_if_notexists<EdgeDataType>(filename, get_option_string("nshards", "auto"));
     
     /* Run */
     SSSPProgram program;
@@ -253,8 +267,8 @@ int main(int argc, const char ** argv) {
 	for(int i=0;i<(int)top.size();i++)
 		std::cout<<top[i].vertex<<"\t "<<top[i].value<<std::endl;
 	*/	
-	//analyze_labels<VertexDataType>(filename, 30);
-	get_top_vertices<VertexDataType>(filename, 20);
+	analyze_labels<VertexDataType>(filename, 30);
+	//get_top_vertices<VertexDataType>(filename, 20);
     metrics_report(m);
     return 0;
 }

@@ -39,7 +39,7 @@
 
 using namespace graphchi;
  
-#define THRESHOLD 1e-3 
+#define THRESHOLD 1e-2    
 #define RANDOMRESETPROB 0.15
 
 
@@ -64,6 +64,8 @@ bool scheduler = false;
 vid_t sum_tasks= 0;
 vid_t curr_sum = 0;
 
+std::vector<float> pr_value1;
+std::vector<float> pr_value8;
 struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
    	bool converged;
 	bool interval_converged; 
@@ -83,6 +85,9 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
       * Called after an iteration has finished. Not implemented.
       */
     void after_iteration(int iteration, graphchi_context &ginfo) {
+		pr_value1.push_back(0);	
+		pr_value8.push_back(0);
+
 		if(converged){
 			logstream(LOG_INFO)<<"converged!"<<std::endl;
 			ginfo.set_last_iteration(iteration);
@@ -131,6 +136,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 			//schedule this vertex for next iteration
 			if(scheduler) ginfo.scheduler->add_task(v.id(), false);
         } else {
+
 			if(scheduler) ginfo.scheduler->remove_tasks_now(v.id(), v.id());
         	float sum=0;
 			float old_value = v.get_data();
@@ -145,9 +151,13 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             
             /* Write my pagerank divided by the number of out-edges to
                each of my out-edges. */
-			
+			/*	
 			//check if PR fluctuate
-
+			if(ginfo.iteration > 1 && pagerank > old_value){
+				std::cout<<"id="<<v.id()<<" pagerank="<<pagerank<<" old_rank="<<old_value<<" indeg="<<v.num_inedges()<<" outdeg="<<v.num_outedges()<<std::endl;
+				assert(false);
+			}
+			*/
             if (v.num_outedges() > 0) {
                 float pagerankcont = pagerank / v.num_outedges();
                 for(int i=0; i < v.num_outedges(); i++) {
@@ -166,7 +176,7 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
             }
             /* Keep track of the progression of the computation.
                GraphChi engine writes a file filename.deltalog. */
-            //ginfo.log_change(std::abs(pagerank - v.get_data()));
+            ginfo.log_change(std::abs(pagerank - v.get_data()));
             
             /* Set my new pagerank as the vertex value */
             v.set_data(pagerank); 
@@ -177,6 +187,13 @@ struct PagerankProgram : public GraphChiProgram<VertexDataType, EdgeDataType> {
 					interval_converged = false;
 			}
         }
+		if(v.id() == 1 || v.id() == 8){
+			if(v.id() == 1){
+				pr_value1.push_back(v.get_data());
+			}else{
+				pr_value8.push_back(v.get_data());
+			}	
+		}
     }
     
 };
@@ -223,7 +240,6 @@ int main(int argc, const char ** argv) {
     scheduler          		= get_option_int("scheduler", false);                    // Non-dynamic version of pagerank.
     int ntop                = get_option_int("top", 50);
     epsilon					= get_option_float("epsilon", 0.001);
-	//bool parallel			= get_option_int("parallel", 0);
 	//num_tasks_print			= get_option_int("print", false);
 	//max_repeat				= get_option_int("repeat", 999999999); // max number of repeat allowed for each subgraph
     /* Process input file - if not already preprocessed */
@@ -235,8 +251,6 @@ int main(int argc, const char ** argv) {
     graphchi_engine<float, float> engine(filename, nshards, scheduler, m); 
     engine.set_modifies_inedges(false); // Improves I/O performance.
     
-	//engine.set_enable_deterministic_parallelism(parallel);	
-
     bool inmemmode = false;//engine.num_vertices() * sizeof(EdgeDataType) < (size_t)engine.get_membudget_mb() * 1024L * 1024L;
     if (inmemmode) {
         logstream(LOG_INFO) << "Running Pagerank by holding vertices in-memory mode!" << std::endl;
@@ -258,6 +272,15 @@ int main(int argc, const char ** argv) {
     }
     
 	metrics_report(m);    
+	FILE* fp = fopen((filename+".blk.csv").c_str(),"w+");
+	assert(fp != NULL);
+	fprintf(fp, "pr_value1,pr_value8\n");
+	int min_len = std::min(pr_value1.size(), pr_value8.size());
+	for(int i=0; i<min_len; i++){
+		fprintf(fp, "%f,%f\n", pr_value1[i], pr_value8[i]);	
+	}
+	fclose(fp);
+	fp = NULL;
 	/*
 	if(	num_tasks_print ){
 		array = (PR_Count*)malloc(sizeof(PR_Count)*nshards);

@@ -55,6 +55,7 @@ using namespace graphchi;
 
 int         iterationcount = 0;
 bool        scheduler = false;
+bool num_tasks_print = false;
 vid_t Max_Cid =(vid_t)-1; 
 
 //vid_t* wcc= NULL;
@@ -174,6 +175,15 @@ struct ConnectedComponentsProgram : public GraphChiProgram<VertexDataType, EdgeD
      */
     void before_exec_interval(vid_t window_st, vid_t window_en, graphchi_context &ginfo) {        
 		interval_converged = true;
+		if(num_tasks_print && scheduler){
+			//vid_t sum = ginfo.scheduler->total_tasks(window_st, window_en);
+			int curr_sum = ginfo.scheduler->total_tasks(window_st, window_en);
+			logstream(LOG_INFO)<<"num of vertices being scheduled="<<curr_sum<<"/"<<window_en-window_st+1<<std::endl;               
+			//sum_tasks += curr_sum;
+			//array[ginfo.exec_interval].count++;
+			//if(scheduler) array[ginfo.exec_interval].tasks += curr_sum;     
+			//else    array[ginfo.exec_interval].tasks +=     window_en - window_st + 1;  
+		}	
     }
     
     /**
@@ -196,9 +206,10 @@ int main(int argc, const char ** argv) {
     
     /* Basic arguments for application */
     std::string filename = get_option_string("file");  // Base filename
-    int niters           = get_option_int("niters", 10000); // Number of iterations (max)
+    int niters           = get_option_int("niters", 100000); // Number of iterations (max)
     scheduler            = get_option_int("scheduler", false);
 	int terminate		 = get_option_int("term", 0);
+	num_tasks_print      = get_option_int("print", 0);
  //   diff_iter			=get_option_int("diff",0);
     /* Process input file - if not already preprocessed */
     int nshards             = (int) convert_if_notexists<EdgeDataType>(filename, get_option_string("nshards", "auto"));
