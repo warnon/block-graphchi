@@ -74,7 +74,11 @@ namespace graphchi {
 //typename svertex_t = graphchi_vertex<VertexDataType, EdgeDataType>
  	
 #define SHARDER_BUFSIZE (64 * 1024 * 1024)
-    
+	
+
+	///////////////////    
+	bool range_specify;	
+	/////////////////
     enum ProcPhase  { COMPUTE_INTERVALS=1, SHOVEL=2 };
     
     template <typename EdgeDataType>
@@ -83,7 +87,8 @@ namespace graphchi {
         virtual bool acceptFirst(EdgeDataType& first, EdgeDataType& second) = 0;
     };
     
-    
+   
+ 
     template <typename EdgeDataType>
     struct edge_with_value {
         vid_t src;
@@ -212,35 +217,38 @@ namespace graphchi {
 					if(buffer[k].dst <  buffer[k-1].dst)
 						assert(false);
 					}
-                logstream(LOG_INFO)<<"=============================================="<<"All sorted by dst check!!!"<<std::endl;
+                //logstream(LOG_INFO)<<"=============================================="<<"All sorted by dst check!!!"<<std::endl;
 				
             }
             
            	// write dst ordered shovel file 
-			logstream(LOG_INFO)<<"my file name1:::"<<shovelname<<std::endl;
+			//logstream(LOG_INFO)<<"my file name1:::"<<shovelname<<std::endl;
             int f = open(shovelname.c_str(), O_WRONLY | O_CREAT, S_IROTH | S_IWOTH | S_IWUSR | S_IRUSR);
 			assert(f != 0);
             writea(f, buffer, numedges * sizeof(edge_with_value<EdgeDataType>));
             close(f);
-            // create src ordered shovel file
-				
-			iSort(buffer, (intT)numedges, (intT)max_vertex, srcF<EdgeDataType>());
-			shovelname2 = shovelname + "s";
-			logstream(LOG_INFO)<<"my file name2::::::"<<shovelname2<<std::endl;
-            int f2 = open(shovelname2.c_str(), O_WRONLY | O_CREAT, S_IROTH | S_IWOTH | S_IWUSR | S_IRUSR);
-            writea(f2, buffer, numedges * sizeof(edge_with_value<EdgeDataType>));
-            close(f2);
-			logstream(LOG_INFO)<<"Sorting edges in buffer by src Done!++++++++++++++++++++++++++"<<shovelname2<<std::endl;	
-				
+			if(!range_specify){
+				// create src ordered shovel file
+
+				iSort(buffer, (intT)numedges, (intT)max_vertex, srcF<EdgeDataType>());
+				shovelname2 = shovelname + "s";
+				//logstream(LOG_INFO)<<"my file name2::::::"<<shovelname2<<std::endl;
+				int f2 = open(shovelname2.c_str(), O_WRONLY | O_CREAT, S_IROTH | S_IWOTH | S_IWUSR | S_IRUSR);
+				writea(f2, buffer, numedges * sizeof(edge_with_value<EdgeDataType>));
+				close(f2);
+				//logstream(LOG_INFO)<<"Sorting edges in buffer by src Done!++++++++++++++++++++++++++"<<shovelname2<<std::endl;	
+
 				for(size_t k=1; k<numedges; k++){
 					//	logstream(LOG_INFO)<<k<<"::::"<<buffer[k].src<<"->"<<buffer[k].dst<<std::endl;
 					if(buffer[k].src <  buffer[k-1].src)
 						assert(false);
 				}
-			
-                logstream(LOG_INFO)<<"=============================================="<<"All sorted by src check!!!"<<std::endl;
+
+				//logstream(LOG_INFO)<<"=============================================="<<"All sorted by src check!!!"<<std::endl;
+			}
 		//	assert(false);	
             free(buffer);
+			//std::cout<<"buffer is freed !"<<std::endl;
         }
     };
     
@@ -377,9 +385,15 @@ namespace graphchi {
         edge_with_value<EdgeDataType> * curshovel_buffer;
         std::vector<pthread_t> shovelthreads;
         std::vector<shard_flushinfo<EdgeDataType> *> shoveltasks;
-        
+
+		//////////////////////////////////
+       	std::vector<int> prange; 
+		int intv_idx;
+		////////////////////////////////
     public:
-        
+       /////////////////////////// 
+		//bool range_specify;
+		/////////////////
         sharder(std::string basefilename) : basefilename(basefilename), m("sharder") {          
             
             edgedatasize = sizeof(FinalEdgeDataType);
@@ -390,6 +404,10 @@ namespace graphchi {
             while (compressed_block_size % sizeof(FinalEdgeDataType) != 0) compressed_block_size++;
             edges_per_block = compressed_block_size / sizeof(FinalEdgeDataType);
             duplicate_edge_filter = NULL;
+			/////////////////////
+			range_specify = false;	
+			intv_idx = 0;
+			//////////////////////
         }
         
         
@@ -434,42 +452,45 @@ namespace graphchi {
         /**
          * Call to finish the preprocessing session.
          */
-        void end_preprocessing() {
-            m.stop_time("preprocessing");
-            flush_shovel(false);
-	        }
+		void end_preprocessing() {
+			m.stop_time("preprocessing");
+			flush_shovel(false);
+		}
         
         void flush_shovel(bool async=true) {
             /* Flush in separate thread unless the last one */
             shard_flushinfo<EdgeDataType> * flushinfo = new shard_flushinfo<EdgeDataType>(shovel_filename(numshovels), max_vertex_id, curshovel_idx, curshovel_buffer, duplicate_edge_filter);
             shoveltasks.push_back(flushinfo);
 
-            if (!async) {
-                curshovel_buffer = NULL;
-                flushinfo->flush();
-                
-                /* Wait for threads to finish */
-                logstream(LOG_INFO) << "Waiting shoveling threads..." << std::endl;
-                for(int i=0; i < (int)shovelthreads.size(); i++) {
-                    pthread_join(shovelthreads[i], NULL);
-                }	
-		      } else {
-                if (shovelthreads.size() > 2) {
-                    logstream(LOG_INFO) << "Too many outstanding shoveling threads..." << std::endl;
+			if (!async) {
+				curshovel_buffer = NULL;
+				flushinfo->flush();
 
-                    for(int i=0; i < (int)shovelthreads.size(); i++) {
-                       pthread_join(shovelthreads[i], NULL);
-			         }
-                    shovelthreads.clear();
-                }
-                curshovel_buffer = (edge_with_value<EdgeDataType> *) calloc(shovelsize, sizeof(edge_with_value<EdgeDataType>));
-                pthread_t t;
-                int ret = pthread_create(&t, NULL, shard_flush_run<EdgeDataType>, (void*)flushinfo);
-                shovelthreads.push_back(t);
-                assert(ret>=0);
-            }
+				/* Wait for threads to finish */
+				logstream(LOG_INFO) << "Waiting shoveling threads..." << std::endl;
+				for(int i=0; i < (int)shovelthreads.size(); i++) {
+					pthread_join(shovelthreads[i], NULL);
+					//std::cout<<"thread join :"<<i<<"/"<<shovelthreads.size()<<std::endl;
+				}	
+				//std::cout<<"end of thread join in for loop"<<std::endl;
+			} else {
+				if (shovelthreads.size() > 2) {
+					logstream(LOG_INFO) << "Too many outstanding shoveling threads..." << std::endl;
+
+					for(int i=0; i < (int)shovelthreads.size(); i++) {
+						pthread_join(shovelthreads[i], NULL);
+					}
+					shovelthreads.clear();
+				}
+				curshovel_buffer = (edge_with_value<EdgeDataType> *) calloc(shovelsize, sizeof(edge_with_value<EdgeDataType>));
+				pthread_t t;
+				int ret = pthread_create(&t, NULL, shard_flush_run<EdgeDataType>, (void*)flushinfo);
+				shovelthreads.push_back(t);
+				assert(ret>=0);
+			}
             numshovels++;
             curshovel_idx=0;
+			//std::cout<<"end of flush_shovel! numshovels="<<numshovels<<std::endl;
         }
         
         /**
@@ -631,7 +652,33 @@ namespace graphchi {
 #endif
                 
             } else {
-                nshards = atoi(nshards_string.c_str());
+				if(isdigit(nshards_string[0]) || nshards_string[0] == '+')
+					nshards = atoi(nshards_string.c_str());
+				else{
+					std::cout<<"before opening interval file"<<std::endl;	
+					FILE* fpi = fopen(nshards_string.c_str(), "r");	
+					assert(fpi != NULL);
+					char buffer[1024];
+					//char delim[] = {'\t', ' ', ','};
+					char delim[] = "\t ,";//{'\t', ' ', ','};
+					//std::cout<<"before while loop"<<std::endl;	
+					while(fgets(buffer, 1024, fpi) != NULL){
+						int len = strlen(buffer);
+						//std::cout<<"len is"<<len<<" buffer"<<buffer<<std::endl;
+						if(len > 0 && buffer[len-1] == '\n') buffer[len-1] = 0;
+						char* start = strtok(buffer, delim);
+						prange.push_back(atoi(start));
+						char* end = strtok(NULL, delim);
+						prange.push_back(atoi(end));
+						std::cout<<atoi(start)<<"-->"<<atoi(end)<<" is pushed back"<<std::endl;
+					}
+					assert(prange.size() % 2 == 0);
+					nshards = prange.size() / 2;
+					//range_specify = true;
+
+					//logstream(LOG_INFO) << "shards and interval is specified!" << prange[prange.size()-1] << std::endl;
+				}		
+		
             }
             assert(nshards > 0);
             logstream(LOG_INFO) << "Number of shards to be created: " << nshards << std::endl;
@@ -922,9 +969,25 @@ namespace graphchi {
             }
 		*/	
            	//////////////////////////////////////////////////////////////////////
-			if(val.dst > intervalarray[gindex]){	
-				createnextshard();
-				gindex++;
+			//if(range_specify){
+			if(prange.size() > 0){
+				if((vid_t) prange[intv_idx+1] < val.dst){
+					//std::cout<<"create nextshard intv_idx="<<intv_idx<<std::endl;
+					prevvid = prange[intv_idx+1];
+					createnextshard();
+					intv_idx += 2;
+				}
+				/*
+				}else{
+					assert((vid_t) prange[intv_idx] <= val.dst);
+				}			
+				*/
+			}else{
+				if(val.dst > intervalarray[gindex]){	
+					prevvid = intervalarray[gindex];
+					createnextshard();
+					gindex++;
+				}
 			}
 			//////////////////////////////////////////////////////////////////// 
             if (cur_shard_counter == shard_capacity) {
@@ -1298,12 +1361,12 @@ namespace graphchi {
 			// generate edgelist file ordered by src id for other purposes
 			//buildsrcfile(membudget_b, Bsize);
 
-
-			constructAll(membudget_b, Bsize);
-
-			///////////////////////////////////////////
-			// change number of shards
-			nshards = intervalarray.size()-1;
+			//if(!range_specify){
+			if(prange.size() == 0){
+				constructAll(membudget_b, Bsize);
+				nshards = intervalarray.size()-1;
+			}
+			 /////////////////////////////////////////// // change number of shards
 			shard_capacity/=2;
 
             sinkbuffer = (edge_with_value<EdgeDataType> *) calloc(shard_capacity, sizeof(edge_with_value<EdgeDataType>));
@@ -1323,7 +1386,7 @@ namespace graphchi {
 				((shovel_merge_source<EdgeDataType> *)sources[i])->deleteshovel();
                 delete (shovel_merge_source<EdgeDataType> *)sources[i];
             }
-           logstream(LOG_INFO)<<"after merge function!!============"<<std::endl; 
+           	logstream(LOG_INFO)<<"after merge function!!============"<<std::endl; 
            
 		
             if (!count_degrees_inmem) {

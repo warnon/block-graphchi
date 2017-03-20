@@ -39,6 +39,7 @@
 
 #include "graphchi_types.hpp"
 #include "api/ischeduler.hpp"
+//#include "engine/auxdata/vertex_data.hpp"
 
 namespace graphchi {
     
@@ -61,6 +62,7 @@ namespace graphchi {
 		int exec_interval;
 		size_t interval_st;
 		size_t interval_en;  
+
 		///
         graphchi_context() : scheduler(NULL), iteration(0), last_iteration(-1) {
             gettimeofday(&start, NULL);

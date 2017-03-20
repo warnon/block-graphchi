@@ -29,6 +29,9 @@
 #ifndef DEF_GRAPHCHI_BITSETSCHEDULER
 #define DEF_GRAPHCHI_BITSETSCHEDULER
 
+//#include <iostream>
+//#include <stdlib.h>
+
 #include "graphchi_types.hpp"
 #include "api/ischeduler.hpp"
 #include "util/dense_bitset.hpp"
@@ -81,8 +84,11 @@ namespace graphchi {
             
         }
         
-        inline bool is_scheduled(vid_t vertex) {
-            return curiteration_bitset->get(vertex);
+        inline bool is_scheduled(vid_t vertex, bool curr_iter = true) {
+			if(curr_iter)
+				return curiteration_bitset->get(vertex);
+			else
+				return nextiteration_bitset->get(vertex);
         }
         
         void remove_tasks(vid_t fromvertex, vid_t tovertex) {
@@ -98,7 +104,19 @@ namespace graphchi {
             has_new_tasks = true;
             curiteration_bitset->setall();
         }
-        
+		       	
+		//num of scheduled vertices in interval [fromvertex, tovertex] added by mzj
+		vid_t total_tasks(vid_t fromvertex, vid_t tovertex){
+			assert(fromvertex <= tovertex && tovertex < curiteration_bitset->size() );		
+			//vid_t min_end =(vid_t)std::min(curiteration_bitset->size() , tovertex+1); 
+			vid_t min_end =curiteration_bitset->size() > (tovertex+1) ? tovertex+1 : curiteration_bitset->size(); 
+			vid_t sum = 0;
+			for(vid_t i=fromvertex; i<min_end; i++){
+				sum += curiteration_bitset->get(i);	
+			}	
+			return sum;
+		}	 		
+
         size_t num_tasks() { 
             size_t n = 0;
             for(vid_t i=0; i < curiteration_bitset->size(); i++) {

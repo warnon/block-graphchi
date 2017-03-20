@@ -196,7 +196,7 @@ int analyze_labels(std::string basefilename, int printtop = 20) {
         //std::cout << (i+1) << ". label: " << curlabels[i].label << ", size: " << curlabels[i].count + 1 << std::endl;
 		sum2 += curlabels[i].count+1;
     }
-	std::cout<<"top"<<printtop<<" sum="<< sum1 <<"\tration="<<((double)sum1*100)/(double)sum2<<"%"<<std::endl;
+	std::cout<<"top"<<printtop<<" sum="<< sum1 <<"\tratio="<<((double)sum1*100)/(double)sum2<<"%"<<std::endl;
    	/* 
 	//add by mzj
 	std::string degreename = basefilename+".csv";

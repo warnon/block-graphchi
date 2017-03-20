@@ -55,6 +55,10 @@
 
 namespace graphchi {
     
+///////////////////////
+//bool range_specify = false;
+//////////////
+
     struct dummy {
     };
     
@@ -261,6 +265,7 @@ namespace graphchi {
                     if (t != NULL) {
                         sharderobj.preprocessing_add_edge(from, to, val);
                     } else {
+						//std::cout<<from<<"->"<<to<<std::endl;
                         sharderobj.preprocessing_add_edge(from, to);
                     }
                 }
@@ -618,7 +623,16 @@ namespace graphchi {
             logstream(LOG_ERROR) << "You need to specify filetype: 'edgelist',  'adjlist', 'binedgelist', or 'metis'." << std::endl;
             assert(false);
         }
-        
+
+       	////////////////////////// 
+		//if(!(isdigit(nshards_string[0]) || nshards_string[0] == '+')) sharderobj.range_specify = true;
+		if( !(nshards_string.find("auto") != std::string::npos || nshards_string == "0") && 
+			!(isdigit(nshards_string[0]) || nshards_string[0] == '+')) {
+			range_specify = true;
+			std::cout<<"range specified: true"<<"\t"<<nshards_string<<std::endl;
+		}
+		///////////////////////////
+
         /* Start preprocessing */
         sharderobj.start_preprocessing();
         
@@ -637,7 +651,6 @@ namespace graphchi {
         } else {
             assert(false);
         }
-        
         /* Finish preprocessing */
         sharderobj.end_preprocessing();
        //	assert(shovel); 
@@ -645,7 +658,8 @@ namespace graphchi {
         if (max_vertex_id > 0) {
             sharderobj.set_max_vertex_id(max_vertex_id);
         }
-        
+       	 
+        logstream(LOG_INFO) << "prepare to execute sharding for " << basefilename << std::endl;
         int nshards = sharderobj.execute_sharding(nshards_string);
         logstream(LOG_INFO) << "Successfully finished sharding for " << basefilename << std::endl;
         logstream(LOG_INFO) << "Created " << nshards << " shards." << std::endl;

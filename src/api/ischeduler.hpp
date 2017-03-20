@@ -40,8 +40,10 @@ namespace graphchi {
         virtual ~ischeduler() {} 
         virtual void add_task(vid_t vid, bool also_this_iteration=false) = 0;
         virtual void add_task_to_all()  = 0;
-        virtual bool is_scheduled(vid_t vertex) = 0;
+        //virtual bool is_scheduled(vid_t vertex) = 0;
+        virtual bool is_scheduled(vid_t vertex, bool cur_iter=true) = 0;
         virtual size_t num_tasks() = 0;
+        virtual vid_t total_tasks(vid_t fromvertex, vid_t tovertex) = 0;
         virtual void new_iteration(int iteration) = 0;
         virtual void remove_tasks(vid_t fromvertex, vid_t tovertex) = 0;
         virtual void remove_tasks_now(vid_t fromvertex, vid_t tovertex) = 0;
@@ -62,8 +64,9 @@ namespace graphchi {
             } 
         }
         virtual void add_task_to_all() { }
-        virtual bool is_scheduled(vid_t vertex) { return true; }
+        virtual bool is_scheduled(vid_t vertex, bool cur_iter=true) { return true; }
         virtual size_t num_tasks() { return 0; }
+        virtual vid_t total_tasks(vid_t fromvertex, vid_t tovertex) { return 0; }
         virtual void new_iteration(int iteration) {} 
         
         virtual void remove_tasks(vid_t fromvertex, vid_t tovertex) {}

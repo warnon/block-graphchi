@@ -39,6 +39,7 @@
 #include <assert.h>
 #include <omp.h>
 #include <vector>
+#include <set>
 #include <sys/time.h>
 
 #include "api/chifilenames.hpp"
@@ -127,16 +128,7 @@ namespace graphchi {
         
         /* Metrics */
         metrics &m;
-       
-
-		/////////////////////////
-		int* schearray;
-		int* hasharray;
-		int qstart;
-		int qend;
-		int qsize;
-		int qlen;
-		///////////////////////// 
+        
         void print_config() {
             logstream(LOG_INFO) << "Engine configuration: " << std::endl;
             logstream(LOG_INFO) << " exec_threads = " << exec_threads << std::endl;
@@ -205,6 +197,7 @@ namespace graphchi {
             enable_deterministic_parallelism = true;
             load_threads = get_option_int("loadthreads", 2);
             exec_threads = get_option_int("execthreads", omp_get_max_threads());
+			//printf("================================================omp_get_max_threads=%d\n", omp_get_max_threads());
             maxwindow = 40000000;
 
             /* Load graph shard interval information */
@@ -213,12 +206,6 @@ namespace graphchi {
             _m.set("file", _base_filename);
             _m.set("engine", "default");
             _m.set("nshards", (size_t)nshards);
-
-			///////////////////////////////
-			logstream(LOG_INFO)<<"in engine !!!!!!! nshards:"<<nshards<<std::endl;
-			initQueue(nshards );	
-				
-			/////////////////////////////////
         }
         
         virtual ~graphchi_engine() {
@@ -234,14 +221,6 @@ namespace graphchi {
                 }
                 sliding_shards[i] = NULL;
             }
-			///////////
-				if(schearray != NULL)
-					free( schearray);
-				schearray=NULL;
-				if(hasharray != NULL)
-					free(hasharray);
-				hasharray=NULL;
-			//////////////////
             degree_handler = NULL;
             vertex_data_handler = NULL;
             delete iomgr;
@@ -251,92 +230,6 @@ namespace graphchi {
         
     protected:
         
-		///////////////////////////////
-
-	bool isEmpty(){
-		//logstream(LOG_INFO)<<"is in isEmpty!!!!!!!"<<qlen<<std::endl;
-		return 0==qlen ;
-	}
-
-	bool isFull(){
-	return qlen == qsize;
-	}
-	int canAdd(){
-		return qsize-1 != qlen;
-	}
-	int getNext(){
-	int qval=-1;
-	if( !isEmpty()){
-		qval = schearray[qstart];
-		hasharray[qval] = 0;
-		qstart = (qstart+1) % qsize;
-		qlen--;
-		}	
-	
-		return qval;
-	}
-	bool isExist(int qindex){
-		if(qindex < qsize)
-			return hasharray[qindex] == 1;
-		else
-			return false;
-	}
-/*
-	bool insertNext(int qindex){
-		if(qindex >= qsize)
-			return false;
-		if( !isFull() && ! hasharray[qindex]  ){
-			hasharray[qindex]=1;
-			qlen++;
-		logstream(LOG_INFO)<<"in insertNext insert shard"<<std::endl;
-			return true;
-		}
-		return false;
-	}
-*/
-	
-	bool  addNext(int qindex){
-//	logstream(LOG_INFO)<<"in addNext qindex"<<qindex<<std::endl;
-		if (qindex >= qsize)
-			return false;
-	//logstream(LOG_INFO)<<"in addNext!!!!!!!!!qindex:"<<qindex<<"hash "<<hasharray[qindex]<<std::endl;
-		if( !isFull() && hasharray[qindex] !=1  ){
-		schearray[qend] = qindex;
-		qend = (qend+1)%qsize;
-		hasharray[qindex] = 1;
-		qlen++;
-	//	logstream(LOG_INFO)<<"in addNext add shard:"<<qindex<<std::endl;
-	//logstream(LOG_INFO)<<"in addNext qlen="<<qlen<<std::endl;
-		return true;	
-		}
-		return false;
-	}	
-	
-	void initQueue( int qshards){
-
-			qsize=qshards;
-			schearray = (int *)malloc(sizeof(int)*qshards);
-			hasharray = (int *)malloc(sizeof(int)*qshards);
-			for(int k=0; k<qsize; k++){
-					schearray[k]=0;
-					hasharray[k]=0;
-			}
-			qstart=0;
-			qend=0;
-			qlen=0;	
-	//	logstream(LOG_INFO)<<"in initQueue func!!!!!!!!!!!!!!!!"<<qshards<<std::endl;
-		assert(schearray != NULL);
-		for(int i=0; i<qshards; i++)
-			{	
-			//	logstream(LOG_INFO)<<"in for i is "<<i<<std::endl;
-			//	hasharray[i]=1;
-				if(addNext(i)){
-					hasharray[i]=1;
-				}
-			 //	hasharray[i]=1;
-			}
-	}
-		////////////////////////////////
         virtual degree_data * create_degree_handler() {
             return new degree_data(base_filename, iomgr);
         }
@@ -366,6 +259,7 @@ namespace graphchi {
         
         virtual void initialize_sliding_shards() {
             assert(sliding_shards.size() == 0);
+			nedges = 0;
             for(int p=0; p < nshards; p++) {
 #ifndef DYNAMICEDATA
                 std::string edata_filename = filename_shard_edata<EdgeDataType>(base_filename, p, nshards);
@@ -416,36 +310,26 @@ namespace graphchi {
         virtual vid_t determine_next_window(vid_t iinterval, vid_t fromvid, vid_t maxvid, size_t membudget) {
             /* Load degrees */
             degree_handler->load(fromvid, maxvid);
-           	//logstream(LOG_INFO)<<"sizeof Bdeg"<<sizeof(svertex_t)<<"\t sizeof Kdeg"<<(sizeof(EdgeDataType) + sizeof(vid_t) + sizeof(graphchi_edge<EdgeDataType>))<<std::endl; 
+            
             /* If is in-memory-mode, memory budget is not considered. */
             if (is_inmemory_mode() || svertex_t().computational_edges()) {
                 return maxvid;
             } else {
                 size_t memreq = 0;
-				//size_t memsum = 0;
                 int max_interval = maxvid - fromvid;
-				//vid_t tmpvid=0;
                 for(int i=0; i < max_interval; i++) {
                     degree deg = degree_handler->get_degree(fromvid + i);
                     int inc = deg.indegree;
                     int outc = deg.outdegree * (!disable_outedges);
+                    
                     // Raw data and object cost included
                     memreq += sizeof(svertex_t) + (sizeof(EdgeDataType) + sizeof(vid_t) + sizeof(graphchi_edge<EdgeDataType>))*(outc + inc);
-					//memsum +=  sizeof(svertex_t) + (sizeof(EdgeDataType) + sizeof(vid_t) + sizeof(graphchi_edge<EdgeDataType>))*(outc + inc);
-					
                     if (memreq > membudget) {
-                        logstream(LOG_DEBUG) << "Memory budget exceeded with " << memreq << "\t membudget+++++++++++++++++++++++++"<<membudget<< std::endl;
+                        logstream(LOG_DEBUG) << "Memory budget exceeded with " << memreq << " bytes." << std::endl;
                         return fromvid + i - 1;  // Previous was enough
                     }
-					/*
-					if(memreq <= membudget){
-						tmpvid = fromvid + i -1;
-					}
-					*/
                 }
-				//logstream(LOG_DEBUG)<<"memsum::"<<memsum<<"\t membudget:++++++++++++++++++++++"<<membudget<<std::endl;
                 return maxvid;
-				//return tmpvid; 
             }
         }
         
@@ -458,7 +342,9 @@ namespace graphchi {
             int nvertices = en - st + 1;
             if (scheduler != NULL) {
                 for(int i=0; i < nvertices; i++) {
-                    bool is_sched = scheduler->is_scheduled(st + i);
+                    //bool is_sched = scheduler->is_scheduled(st + i);
+					///////////////////////////////
+                    bool is_sched = true;
                     if (is_sched) {
                         degree d = degree_handler->get_degree(st + i);
                         num_edges += d.indegree * store_inedges + d.outdegree;
@@ -484,9 +370,10 @@ namespace graphchi {
                     /* Load memory shard - is internally parallelized */
                     if (!memoryshard->loaded()) {
                         memoryshard->load();
-                    }
+                    }else{
+						//std::cout<<"memory shard has been loaded!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"<<std::endl;
+					}
                     
-           	//logstream(LOG_INFO)<<"In load before update!!!! mem shard has been loaded !!"<<std::endl; 
                     /* Load vertex edges from memory shard */
                     memoryshard->load_vertices(sub_interval_st, sub_interval_en, vertices, true, !disable_outedges);
                   
@@ -508,70 +395,72 @@ namespace graphchi {
                     }
                 }
             }
+            
             /* Wait for all reads to complete */
             iomgr->wait_for_reads();
         }
-       	////////////////////////////////////////////////////////
-		bool isConverged( std::vector<svertex_t> &vertices ){
-				size_t nvertices = vertices.size();
-			//	logstream(LOG_INFO)<<"is in isConverged !!!!!!!!!!!size::"<<nvertices<<std::endl;
-				for(int i=0; i < (int)nvertices; i++){
-					  if(vertices[i].modified){
-				//	logstream(LOG_INFO)<<"is not converged!!!!!!!!!!!!!"<<std::endl;
-							return false;
-					}
-				}
-			//	logstream(LOG_INFO)<<"is converged!!!!!!!!!!~~~~~"<<std::endl;
-					return true;
-		}	
-		/*
-		 find all modified vertices and corresponding dst_id of  outedges 
-			add corresponding interval_id of dst_id  to schearray 
-		*/
-		void addShardsToQueue( std::vector<svertex_t>& vertices ){
-				logstream(LOG_INFO)<<"in addShardsTo Queue start"<<std::endl;
-				size_t nvertices = vertices.size();
-				for(int i=0; i < (int)nvertices; i++){
-
-					svertex_t& vertextmp = vertices[i];
-					  if(vertextmp.modified)
-						{
-							int outnum = vertextmp.num_outedges();
-									
-						//	int outnum = vertextmp.num_edges();
-									
-						  graphchi_edge<EdgeDataType> * edgetmp;
-
-							for(int j=0; j<outnum; j++){
-								edgetmp = vertextmp.edge(j);
-								vid_t end_id =  edgetmp->vertex_id();
-								// determine which  interval end_id belong to
-								int interval_id = determine_interval(end_id );
-									if(interval_id != -1){
-										addNext(interval_id);
-							//		logstream(LOG_INFO)<<"in addShardsToQueue  shard:"<<interval_id<<std::endl;	
-								}
-							}
-						}
-				}
-				logstream(LOG_INFO)<<"in addShardsTo Queue End"<<std::endl;
-		}
-	 	int  determine_interval(vid_t vertexid){
-			size_t isize = intervals.size();
-			for( int i=0; i<(int)isize; i++){
-				if(vertexid >= intervals[i].first && vertexid <= intervals[i].second ){
-						return i;
-				}	
-			}
-			return -1;
-		}
 		////////////////////////////////
-        virtual void exec_updates(GraphChiProgram<VertexDataType, EdgeDataType, svertex_t> &userprogram,
+			
+		//construct color array
+			
+		// color scheduling 
+		//vid_t max_colors = 0;
+		vid_t compute_colors(std::vector<svertex_t> &vertices, std::vector<vid_t> &vcolors){
+			size_t nvertices = vertices.size();
+			//std::vector<vid_t> vcolors(nvertices, 0);	 		
+			std::vector<vid_t> random_orders(nvertices); 
+			for(int idx=0; idx < (int)nvertices; idx++){
+				random_orders[idx] = (vid_t)idx;	
+			}
+			std::random_shuffle(random_orders.begin(), random_orders.end());		
+			std::set<vid_t> nb_colors; 
+			vid_t max_colors = 0;
+			for(int i=0; i<(int)nvertices; i++){
+				vid_t vid = random_orders[i];	
+				//vid_t real_vid = vid + sub_interval_st;
+				svertex_t v = vertices[vid];
+				//graphchi_edge<EdgeDataType>
+				nb_colors.clear();
+				for(int j=0; j<v.num_edges(); j++){
+					graphchi_edge<EdgeDataType>* edge = v.edge(j);
+					vid_t nid = edge->vertex_id();
+					if(nid < sub_interval_st || nid > sub_interval_en) continue;
+					vid_t nid_offset = nid - sub_interval_st;
+					nb_colors.insert(vcolors[nid_offset]);
+				}
+				// get smallest unused color
+				vid_t my_color = 0;
+				for(std::set<vid_t>::iterator it=nb_colors.begin(); it != nb_colors.end(); it++){
+					if(my_color != *it)
+						break;
+					else
+						my_color++;
+				}
+				max_colors = my_color > max_colors ? my_color : max_colors;	
+				vcolors[vid] = my_color;	
+			}	
+			return max_colors;
+		}
+		
+		bool check_colors(std::vector<svertex_t> &vertices, std::vector<vid_t> &vcolors){
+			for(int i=0; i<vertices.size(); i++){
+				svertex_t v = vertices[i];	
+				for(int j=0; j<v.num_edges(); j++){
+					graphchi_edge<EdgeDataType>* edge = v.edge(j);
+					vid_t nid = edge->vertex_id();
+					if(nid < sub_interval_st || nid > sub_interval_en) continue;
+					vid_t nid_offset = nid - sub_interval_st;
+					assert(vcolors[(int)nid_offset] != vcolors[i]);	
+				}
+			}	
+			return true;
+		}
+		// execute updates using coloring scheduling	
+        virtual void exec_updates_coloring(GraphChiProgram<VertexDataType, EdgeDataType, svertex_t> &userprogram,
                           std::vector<svertex_t> &vertices) {
-            metrics_entry me = m.start_time();
+            metrics_entry me1 = m.start_time();
             size_t nvertices = vertices.size();
-			bool converge = false;
-		//'	int iterc=chicontext.iteration;
+			/*
             if (!enable_deterministic_parallelism) {
                 for(int i=0; i < (int)nvertices; i++) vertices[i].parallel_safe = true;
             }
@@ -583,8 +472,80 @@ namespace graphchi {
                 for(int idx=0; idx <= (int)sub_interval_len; idx++) random_order[idx] = idx;
                 std::random_shuffle(random_order.begin(), random_order.end());
             }
-             
+            */ 
+			
+			std::vector<vid_t> vcolors(nvertices, 0);	 		
+				
+            //metrics_entry me = m.start_time();
+            //m.start_time("coloring construct");
+			int colors = compute_colors(vertices, vcolors);
+			//check if compute_colors works correctly
+			//check_colors(vertices, vcolors);	
+			std::vector< std::vector<vid_t> > color_array(colors); 	
+			for(int i=0; i<nvertices; i++){
+				int color = (int) vcolors[i];		
+				if(color >= (int)color_array.size())	
+					color_array.resize(color+1);	
+				color_array[color].push_back((vid_t)i);	
+			}
+            m.stop_time(me1, "coloring-construct");
+			printf("colors=%d\n", colors);
+			metrics_entry me = m.start_time();
+            //metrics_entry me = m.start_time();
+			do {
+				////////////////
+				//userprogram.before_iteration(iter, chicontext);
+				userprogram.before_exec_interval(sub_interval_st, sub_interval_en, chicontext);
+				//////////////////
+				for(int i=0; i<(int)color_array.size(); i++){	
+					omp_set_num_threads(exec_threads);
+					#pragma omp parallel sections 
+					{
+					#pragma omp section
+						{
+					#pragma omp parallel for
+							for(int idx=0; idx < (int)color_array[i].size(); idx++) {
+								// vid_t vid = sub_interval_st + (randomization ? random_order[idx] : idx);
+								vid_t vid = sub_interval_st + color_array[i][idx];
+								assert(!(vid < sub_interval_st || vid > sub_interval_en));
+								svertex_t & v = vertices[vid - sub_interval_st];
+								if (!disable_vertexdata_storage)
+									v.dataptr = vertex_data_handler->vertex_data_ptr(vid);
+								if (v.scheduled) 
+									userprogram.update(v, chicontext);
+							}
+						}
+					}
+					}//end for loop
+				} while (userprogram.repeat_updates(chicontext));
+				m.stop_time(me, "execute-updates");
+			}
+		////////////////////////////////
+        
+        virtual void exec_updates(GraphChiProgram<VertexDataType, EdgeDataType, svertex_t> &userprogram,
+                          std::vector<svertex_t> &vertices) {
+            metrics_entry me = m.start_time();
+            size_t nvertices = vertices.size();
+            if (!enable_deterministic_parallelism) {
+                for(int i=0; i < (int)nvertices; i++) vertices[i].parallel_safe = true;
+            }
+            int sub_interval_len = sub_interval_en - sub_interval_st;
+
+            std::vector<vid_t> random_order(randomization ? sub_interval_len + 1 : 0);
+            if (randomization) {
+                // Randomize vertex-vector
+                for(int idx=0; idx <= (int)sub_interval_len; idx++) random_order[idx] = idx;
+                std::random_shuffle(random_order.begin(), random_order.end());
+            }
+
+			int count = 0;
+			bool any_scheduled = false;
             do {
+				////////////////
+				//userprogram.before_iteration(iter, chicontext);
+                userprogram.before_exec_interval(sub_interval_st, sub_interval_en, chicontext);
+				//////////////////
+				
                 omp_set_num_threads(exec_threads);
                 
         #pragma omp parallel sections 
@@ -599,10 +560,10 @@ namespace graphchi {
                                 if (exec_threads == 1 || v.parallel_safe) {
                                     if (!disable_vertexdata_storage)
                                         v.dataptr = vertex_data_handler->vertex_data_ptr(vid);
-                                    if (v.scheduled){ 
+                                    //if (v.scheduled) 
+									//if(scheduler->is_scheduled(vid))
+									if(chicontext.scheduler->is_scheduled(vid))
                                         userprogram.update(v, chicontext);
-
-									}
                                 }
                             }
                         }
@@ -613,11 +574,10 @@ namespace graphchi {
                                 for(int idx=0; idx <= (int)sub_interval_len; idx++) {
                                     vid_t vid = sub_interval_st + (randomization ? random_order[idx] : idx);
                                     svertex_t & v = vertices[vid - sub_interval_st];
-                                    if (!v.parallel_safe && v.scheduled) {
+                                    if (!v.parallel_safe && chicontext.scheduler->is_scheduled(vid)) {
                                         if (!disable_vertexdata_storage)
                                             v.dataptr = vertex_data_handler->vertex_data_ptr(vid);
                                         userprogram.update(v, chicontext);
-										
                                         nonsafe_count++;
                                     }
                                 }
@@ -626,31 +586,12 @@ namespace graphchi {
                             }
                         }
                 }
-			////////////////////////////////////////////
-				if (chicontext.iteration == 0){
-					converge = true;
-					if(!isFull())
-					addNext(exec_interval);
-				}else{
-			//	chicontext.iteration++;
-            	 converge =  isConverged(vertices);
-					}
-					if(!converge){
-						if(canAdd()){
-						addShardsToQueue(vertices);
-						}	
-					//	logstream(LOG_INFO)<<"is not converged!! add another shard to queue chiIteration"<<chicontext.iteration<<std::endl;
-					}else{
-					//	logstream(LOG_INFO)<<"the shard has converged!! exec_update exit now"<<std::endl;
-				}
 				
-			//	chicontext.iteration++;
-			 } while ( !converge );
-		//	chicontext.iteration=iterc;
-			/////////////////////////////////////////////
+            } while (userprogram.repeat_updates(chicontext));
+            
             m.stop_time(me, "execute-updates");
         }
-       	 
+        
 
         /**
          Special method for running all iterations with the same vertex-vector.
@@ -752,7 +693,10 @@ namespace graphchi {
                 }
                 
                 if (scheduler != NULL) {
-                    bool is_sched = ( scheduler->is_scheduled(sub_interval_st + i));
+                    //bool is_sched = ( scheduler->is_scheduled(sub_interval_st + i));
+					//////////////////////////////////////////////
+					//modified by mzj, read in all vertices in the interval.
+                    bool is_sched = true;
                     if (is_sched) {
                         vertices[i].scheduled =  true;
                         nupdates++;
@@ -767,24 +711,18 @@ namespace graphchi {
             work += ecounter;
             assert(ecounter <= num_edges);
         }
-        /*
-       ///////////////////////////////////////////////////////////////
-
-		after converged ,every vertex has not changed!!!!!!!!!!!
-		//////////////////////////////// 
-		*/
+        
+        
         void save_vertices(std::vector<svertex_t> &vertices) {
             if (disable_vertexdata_storage) return;
-         //   size_t nvertices = vertices.size();
-            bool modified_any_vertex =true;// false;
-			/*
+            size_t nvertices = vertices.size();
+            bool modified_any_vertex = false;
             for(int i=0; i < (int)nvertices; i++) {
                 if (vertices[i].modified) {
                     modified_any_vertex = true;
                     break;
                 }
             }
-			*/
             if (modified_any_vertex) {
                 vertex_data_handler->save();
             }
@@ -804,6 +742,20 @@ namespace graphchi {
         
     public:
         
+		/////////////////////////////
+
+		vertex_data_store<VertexDataType> * get_vertex_data_handle(){
+			return	vertex_data_handler;
+		}
+		vid_t locate_interval(vid_t vid){
+			for(int i=0; i<intervals.size(); i++){
+				if(vid <= intervals[i].second && intervals[i].first <= vid)	
+					return i;
+			}		
+			std::cout<<"locate_interval vid="<<vid<<" out of range!"<<std::endl;
+			assert(false);
+		}	
+		////////////////////////////
         virtual std::vector< std::pair<vid_t, vid_t> > get_intervals() {
             return intervals;
         }
@@ -878,6 +830,7 @@ namespace graphchi {
             if (scheduler == NULL) return true;
             for(vid_t v=st; v<=en; v++) {
                 if (scheduler->is_scheduled(v)) {
+					//std::cout<<"st="<<st<<"\ten="<<en<<"\tvid="<<v<<std::endl;
                     return true;
                 }
             }
@@ -945,6 +898,7 @@ namespace graphchi {
             }
             
             niters = _niters;
+			//std::cout<<"niters ="<<niters<<std::endl;
             logstream(LOG_INFO) << "GraphChi starting" << std::endl;
             logstream(LOG_INFO) << "Licensed under the Apache License 2.0" << std::endl;
             logstream(LOG_INFO) << "Copyright Aapo Kyrola et al., Carnegie Mellon University (2012)" << std::endl;
@@ -971,30 +925,23 @@ namespace graphchi {
             /* Install a 'mock'-scheduler to chicontext if scheduler
              is not used. */
             chicontext.scheduler = scheduler;
+
+			/* last_iteration of chicontext should be set to -1 in each run
+				 important bugfix by mzj 2016/3/12
+			*/
+			chicontext.last_iteration = -1;
             if (scheduler == NULL) {
                 chicontext.scheduler = new non_scheduler();
             }
-            
+           	 
             /* Print configuration */
             print_config();
-            
+           //////////////////////
+			//chicontext.vertex_data_handler = vertex_data_handler;
+		   ///////////////// 
             
             /* Main loop */
-///////////////////////////////////////////////
-         /*   for(iter=0; iter < niters; iter++) {*/
-				iter=0;
-				int	interval_idx=0;
-				int icount=0;
-				logstream(LOG_INFO)<<"before isEmpty !!!!!!!!!!!!!! len of schearray:"<<qlen<<std::endl;
-				while ( !isEmpty()){
-                    exec_interval = interval_idx=getNext() ;
-				//	icount++;
-					if(icount >= nshards){
-						iter++;
-						chicontext.iteration++;
-					}
-					icount++;
- ////////////////////////////////////////////////
+            for(iter=0; iter < niters; iter++) {
                 logstream(LOG_INFO) << "Start iteration: " << iter << std::endl;
                 
                 initialize_iter();
@@ -1021,8 +968,12 @@ namespace graphchi {
                     if (scheduler != NULL) {
                         if (!scheduler->has_new_tasks) {
                             logstream(LOG_INFO) << "No new tasks to run!" << std::endl;
+							////////////////////////
+            				chicontext.set_last_iteration(iter);
+
                             break;
                         }
+						
                         scheduler->has_new_tasks = false; // Kind of misleading since scheduler may still have tasks - but no new tasks.
                     }
                 }
@@ -1031,27 +982,20 @@ namespace graphchi {
                 if (scheduler != NULL)
                     scheduler->new_iteration(iter);
                 
-                
                 std::vector<int> intshuffle(nshards);
                 
                 if (randomization) {
                     for(int i=0; i<nshards; i++) intshuffle[i] = i;
                     std::random_shuffle(intshuffle.begin(), intshuffle.end());
                 }
-               
+                
                 /* Interval loop */
-               /* for(int interval_idx=0; interval_idx < nshards; ++interval_idx) {*/
-		/*		int	interval_idx=0;
-				int icount=0;
-				logstream(LOG_INFO)<<"before isEmpty !!!!!!!!!!!!!! len of schearray:"<<qlen<<std::endl;
-				while ( !isEmpty()){
-                    exec_interval = interval_idx=getNext() ;
-					if(icount >= nshards){
-						chicontext.iteration++;
-					}
-					icount++;
-               */  
-			 //  logstream(LOG_INFO)<<"is in run && while loop!!!!!!!!!!!! exec_interval:"<<exec_interval<<std::endl;
+                for(int interval_idx=0; interval_idx < nshards; ++interval_idx) {
+                    exec_interval = interval_idx;
+					/////////////////
+					// for repeat update use
+                   	chicontext.exec_interval = exec_interval;
+					/////////////////
                     if (randomization && iter > 0) { // NOTE: only randomize shard order after first iteration so we can compute indices
                         exec_interval = intshuffle[interval_idx];
                         // Hack to make system work if we jump backwards
@@ -1068,9 +1012,11 @@ namespace graphchi {
                     vid_t interval_en = get_interval_end(exec_interval);
                     
                     if (interval_st > interval_en) continue; // Can happen on very very small graphs.
-
+					
+					/*
                     if (!is_inmemory_mode())
                         userprogram.before_exec_interval(interval_st, interval_en, chicontext);
+					*/
 
                     /* Flush stream shard for the exec interval */
                     sliding_shards[exec_interval]->flush();
@@ -1083,7 +1029,8 @@ namespace graphchi {
                     memoryshard->set_disable_async_writes(randomization);
                     
                     sub_interval_st = interval_st;
-                    logstream(LOG_INFO) << chicontext.runtime() << "s: Starting: "<<"exec_interval:"<<exec_interval<<"\t"<< sub_interval_st << "----" << interval_en << std::endl;
+                    logstream(LOG_INFO) << chicontext.runtime() << "s: Starting: " 
+                    << sub_interval_st << " -- " << interval_en << std::endl;
                     
                     while (sub_interval_st <= interval_en) {
                         
@@ -1091,16 +1038,13 @@ namespace graphchi {
                         /* Determine the sub interval */
                         sub_interval_en = determine_next_window(exec_interval,
                                                                 sub_interval_st, 
-                                                               // std::min(interval_en, (is_inmemory_mode() ? interval_en : sub_interval_st + maxwindow)),
-																//don't need to consider interval_en
-																interval_en ,
+                                                                std::min(interval_en, (is_inmemory_mode() ? interval_en : sub_interval_st + maxwindow)), 
                                                                 size_t(membudget_mb) * 1024 * 1024);
                         assert(sub_interval_en >= sub_interval_st);
-						///////////////////////////////
-                       	if(sub_interval_en != interval_en)
-						logstream(LOG_INFO)<<"Error!!!!!!!!!!!!!!!!! sub_en != interval_en!!!!!!!!!!!!!!!!!!"<<std::endl;
- 						////////////////////////////////
-                        logstream(LOG_INFO) << "Iteration " << /*iter*/chicontext.iteration << "/" << (niters - 1) << ", subinterval: " << sub_interval_st << " - " << sub_interval_en << std::endl;
+                        ////////modified by mzj
+						chicontext.set_interval_range(sub_interval_st, sub_interval_en);	
+						///////
+                        logstream(LOG_INFO) << "Iteration " << iter << "/" << (niters - 1) << ", subinterval: " << sub_interval_st << " - " << sub_interval_en << std::endl;
                                                 
                         bool any_vertex_scheduled = is_any_vertex_scheduled(sub_interval_st, sub_interval_en);
                         if (!any_vertex_scheduled) {
@@ -1118,9 +1062,7 @@ namespace graphchi {
                         logstream(LOG_DEBUG) << "Allocation " << nvertices << " vertices, sizeof:" << sizeof(svertex_t)
                         << " total:" << nvertices * sizeof(svertex_t) << std::endl;
                         init_vertices(vertices, edata);
-                       	
-					//	logstream(LOG_INFO)<<"in engine run before load"<<std::endl;
-		 
+                        
                         /* Load data */
                         load_before_updates(vertices);                        
                         
@@ -1128,26 +1070,24 @@ namespace graphchi {
                         
                         logstream(LOG_INFO) << "Start updates" << std::endl;
                         /* Execute updates */
-							// only if nshards is only one and maxwindow
                         if (!is_inmemory_mode()) {
-					//		logstream(LOG_INFO)<<"is in NOT  memo mode!!!!!!!!!!!!!!!!!!!!"<<std::endl;
-                            exec_updates(userprogram, vertices);
+							if(1 == get_option_int("color", 0))
+								exec_updates_coloring(userprogram, vertices);		
+							else
+                            	exec_updates(userprogram, vertices);
                             /* Load phase after updates (used by the functional engine) */
                             load_after_updates(vertices);
                         } else {
-						//	logstream(LOG_INFO)<<"is  in memo mode!~~~~~~~~~~~~~~~"<<std::endl;
+
                             exec_updates_inmemory_mode(userprogram, vertices); 
                         }
-                        logstream(LOG_INFO) << "Finished updates iteration:"<<chicontext.iteration << std::endl;
-              	// increment chicontext.iteration
-			//		chicontext.iteration++; 
+                        logstream(LOG_INFO) << "Finished updates" << std::endl;
+                        
+                        
                         /* Save vertices */
                         if (!disable_vertexdata_storage) {
-					//		logstream(LOG_INFO)<<"================================after converged save vertices~~~~~~~~~~~~~~~~~~~~~~~~~"<<std::endl;
                             save_vertices(vertices);
                         }
-					//	iter++;
-					//	chicontext.iteration++;
                         sub_interval_st = sub_interval_en + 1;
                         
                         /* Delete edge buffer. TODO: reuse. */
@@ -1171,10 +1111,8 @@ namespace graphchi {
                     if (!is_inmemory_mode())
                         userprogram.after_exec_interval(interval_st, interval_en, chicontext);
 
-            //    } // For exec_interval
-              	// increment chicontext.iteration
-				//	chicontext.iteration++;
-					chicontext.set_last_iteration(iter); 
+                } // For exec_interval
+                
                 if (!is_inmemory_mode())  // Run sepately
                     userprogram.after_iteration(iter, chicontext);
                 
@@ -1189,12 +1127,12 @@ namespace graphchi {
                 /* Write progress log */
                 write_delta_log();
                 
+                /* Check if user has defined a last iteration */
                 if (chicontext.last_iteration >= 0) {
                     niters = chicontext.last_iteration + 1;
                     logstream(LOG_DEBUG) << "Last iteration is now: " << (niters-1) << std::endl;
                 }
                 iteration_finished();
-			//	logstream(LOG_INFO)<<"iteration has finished!!!"<<std::endl;
                 iomgr->first_pass_finished(); // Tell IO-manager that we have passed over the graph (used for optimization)
             } // Iterations
             
@@ -1212,7 +1150,8 @@ namespace graphchi {
 #endif
             
             m.set("scheduler", (size_t)use_selective_scheduling);
-            m.set("niters", niters);
+            //m.set("niters", niters);
+            m.set("niters", chicontext.last_iteration+1);
             
             // Close outputs
             for(int i=0; i< (int)outputs.size(); i++) {
@@ -1229,6 +1168,12 @@ namespace graphchi {
             if (modifies_inedges || modifies_outedges) {
                 iomgr->commit_cached_blocks();
             }
+			//add by mzj, free allocated object scheduler
+			if(chicontext.scheduler != NULL){
+				delete chicontext.scheduler;
+				chicontext.scheduler = NULL;		
+				scheduler = NULL;
+			}
         }
         
         virtual void iteration_finished() {
@@ -1302,6 +1247,12 @@ namespace graphchi {
         }
       
     public:
+		/*
+		vertex_data_store<VertexDataType> * get_vertex_data_handle(){
+        	return vertex_data_handler;
+		}
+		*/
+
         void set_disable_vertexdata_storage() {
             this->disable_vertexdata_storage = true;
         }
